@@ -1,9 +1,11 @@
-import { useMemo, useState } from "react";
+import type { ChangeEvent, Dispatch, SetStateAction } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   ArrowLeft,
   ArrowUpDown,
   ArrowUpRight,
+  BadgeCheck,
   Bike,
   CheckCircle2,
   ChevronRight,
@@ -18,6 +20,7 @@ import {
   MessageSquareText,
   Package,
   Pencil,
+  PhoneCall,
   Plus,
   RefreshCw,
   Save,
@@ -25,6 +28,7 @@ import {
   ShieldCheck,
   Sparkles,
   Trash2,
+  Wrench,
   X,
 } from "lucide-react";
 
@@ -45,10 +49,13 @@ type Product = {
   views: number;
   leads: number;
   updatedAt: string;
+  highlights: string[];
 };
 
 type AdminMode = "ready" | "loading" | "empty" | "error";
-type ProductDraft = Pick<Product, "title" | "type" | "price" | "meta" | "description" | "status">;
+type ProductDraft = Pick<Product, "title" | "type" | "price" | "meta" | "description" | "status" | "image">;
+
+const STORAGE_KEY = "estacion-2-ruedas-products-v1";
 
 const initialProducts: Product[] = [
   {
@@ -65,6 +72,7 @@ const initialProducts: Product[] = [
     views: 428,
     leads: 16,
     updatedAt: "Hoy, 10:24",
+    highlights: ["Documentacion al dia", "Service revisado", "Lista para transferir"],
   },
   {
     id: 2,
@@ -80,6 +88,7 @@ const initialProducts: Product[] = [
     views: 311,
     leads: 9,
     updatedAt: "Ayer, 18:05",
+    highlights: ["Papeles verificados", "Motor sereno", "Cubiertas en buen estado"],
   },
   {
     id: 3,
@@ -95,6 +104,7 @@ const initialProducts: Product[] = [
     views: 194,
     leads: 6,
     updatedAt: "Lun, 09:18",
+    highlights: ["Frenos a disco", "Cuadro de aluminio", "Cambio regulado"],
   },
   {
     id: 4,
@@ -110,7 +120,33 @@ const initialProducts: Product[] = [
     views: 0,
     leads: 0,
     updatedAt: "Sin publicar",
+    highlights: ["Equipada para ciudad", "Asiento confortable", "Lista para rodar"],
   },
+];
+
+const trustItems = [
+  {
+    icon: <BadgeCheck size={20} />,
+    title: "Unidades revisadas",
+    text: "Cada publicacion se controla antes de mostrarse.",
+  },
+  {
+    icon: <ShieldCheck size={20} />,
+    title: "Papeles claros",
+    text: "Te contamos el estado real de la documentacion.",
+  },
+  {
+    icon: <Wrench size={20} />,
+    title: "Entrega preparada",
+    text: "Motos y bicis listas para ver, probar y retirar.",
+  },
+];
+
+const buyingSteps = [
+  "Elegis la unidad que te interesa",
+  "Coordinamos por WhatsApp",
+  "La ves en Av. Alem 439",
+  "Definimos entrega y documentacion",
 ];
 
 const blankDraft: ProductDraft = {
@@ -120,7 +156,75 @@ const blankDraft: ProductDraft = {
   meta: "",
   description: "",
   status: "Borrador",
+  image: "",
 };
+
+function isProductStatus(value: unknown): value is ProductStatus {
+  return value === "Publicada" || value === "Pausada" || value === "Reservada" || value === "Borrador";
+}
+
+function isProductType(value: unknown): value is ProductType {
+  return value === "Moto" || value === "Bicicleta";
+}
+
+function readText(record: Record<string, unknown>, key: string, fallback: string) {
+  return typeof record[key] === "string" ? record[key] : fallback;
+}
+
+function readNumber(record: Record<string, unknown>, key: string, fallback: number) {
+  return typeof record[key] === "number" ? record[key] : fallback;
+}
+
+function normalizeProducts(value: unknown): Product[] {
+  if (!Array.isArray(value)) return initialProducts;
+
+  return value
+    .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+    .map((item, index) => {
+      const fallback = initialProducts[index % initialProducts.length];
+      const typeValue = item.type;
+      const statusValue = item.status;
+      const highlights = Array.isArray(item.highlights) ? item.highlights.filter((highlight): highlight is string => typeof highlight === "string") : fallback.highlights;
+
+      return {
+        id: readNumber(item, "id", fallback.id),
+        type: isProductType(typeValue) ? typeValue : fallback.type,
+        title: readText(item, "title", fallback.title),
+        meta: readText(item, "meta", fallback.meta),
+        price: readText(item, "price", fallback.price),
+        description: readText(item, "description", fallback.description),
+        image: readText(item, "image", fallback.image),
+        tone: fallback.tone,
+        status: isProductStatus(statusValue) ? statusValue : fallback.status,
+        stockCode: readText(item, "stockCode", fallback.stockCode),
+        views: readNumber(item, "views", fallback.views),
+        leads: readNumber(item, "leads", fallback.leads),
+        updatedAt: readText(item, "updatedAt", fallback.updatedAt),
+        highlights: highlights.length > 0 ? highlights : fallback.highlights,
+      };
+    });
+}
+
+function readStoredProducts() {
+  if (typeof window === "undefined") return initialProducts;
+
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    return stored ? normalizeProducts(JSON.parse(stored)) : initialProducts;
+  } catch {
+    return initialProducts;
+  }
+}
+
+function usePersistentProducts() {
+  const [products, setProducts] = useState<Product[]>(readStoredProducts);
+
+  useEffect(() => {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(products));
+  }, [products]);
+
+  return [products, setProducts] as const;
+}
 
 function Brand({ admin = false }: { admin?: boolean }) {
   return (
@@ -136,18 +240,21 @@ function Brand({ admin = false }: { admin?: boolean }) {
   );
 }
 
-function Storefront() {
+function Storefront({ products }: { products: Product[] }) {
   const [filter, setFilter] = useState<"Todas" | ProductType>("Todas");
   const [query, setQuery] = useState("");
+  const featuredProduct = products.find((item) => item.status === "Publicada") ?? products[0] ?? initialProducts[0];
+  const publicProducts = products.filter((item) => item.status === "Publicada" || item.status === "Reservada");
+  const availableCount = products.filter((item) => item.status === "Publicada").length;
+  const reservedCount = products.filter((item) => item.status === "Reservada").length;
   const visible = useMemo(
     () =>
-      initialProducts.filter(
+      publicProducts.filter(
         (item) =>
-          item.status === "Publicada" &&
           (filter === "Todas" || item.type === filter) &&
           item.title.toLowerCase().includes(query.toLowerCase()),
       ),
-    [filter, query],
+    [filter, publicProducts, query],
   );
 
   return (
@@ -158,7 +265,11 @@ function Storefront() {
         </a>
         <nav aria-label="Navegacion principal">
           <a href="#catalogo">Catalogo</a>
+          <a href="#confianza">Como trabajamos</a>
           <a href="#ubicacion">Donde estamos</a>
+          <a href="https://wa.me/5493815448139" className="whatsapp-link" target="_blank" rel="noreferrer">
+            <MessageCircle size={17} /> WhatsApp
+          </a>
           <a href="/admin" className="admin-link">
             <ShieldCheck size={17} /> Administrar
           </a>
@@ -167,36 +278,69 @@ function Storefront() {
 
       <section className="hero" id="inicio">
         <div className="hero-copy">
-          <span className="eyebrow">SAN MIGUEL DE TUCUMAN</span>
+          <span className="eyebrow">AV. ALEM 439 / TUCUMAN</span>
           <h1>
-            Tu proxima
+            Estacion
             <br />
-            <em>aventura</em>
-            <br />
-            empieza aca.
+            <em>2 Ruedas</em>
           </h1>
-          <p>Motos y bicicletas seleccionadas, listas para salir. Encontra la tuya y consultanos directamente.</p>
-          <a className="primary-cta" href="#catalogo">
-            Ver unidades <ChevronRight size={20} />
-          </a>
+          <p>Compra y venta de motos y bicicletas seleccionadas. Publicamos unidades revisadas, con informacion clara y atencion directa por WhatsApp.</p>
+          <div className="hero-actions">
+            <a className="primary-cta" href="#catalogo">
+              Ver unidades <ChevronRight size={20} />
+            </a>
+            <a className="secondary-cta" href="https://wa.me/5493815448139" target="_blank" rel="noreferrer">
+              <MessageCircle size={19} /> Consultar ahora
+            </a>
+          </div>
+          <div className="hero-proof" aria-label="Datos del local">
+            <span>
+              <strong>Av. Alem 439</strong>
+              San Miguel de Tucuman
+            </span>
+            <span>
+              <strong>WhatsApp directo</strong>
+              381 544-8139
+            </span>
+            <span>
+              <strong>Stock revisado</strong>
+              Motos y bicicletas
+            </span>
+          </div>
         </div>
         <div className="hero-card">
-          <img src={initialProducts[0].image} alt="Motocicleta roja de muestra" />
+          {featuredProduct.image ? <img src={featuredProduct.image} alt={featuredProduct.title} /> : <ImageOff size={42} />}
           <span className="available">Disponible ahora</span>
           <div className="hero-card-caption">
             <span>Destacada</span>
-            <strong>Honda Wave 110S</strong>
+            <strong>{featuredProduct.title}</strong>
           </div>
         </div>
+      </section>
+
+      <section className="trust-strip" id="confianza" aria-label="Confianza y forma de trabajo">
+        {trustItems.map((item) => (
+          <article key={item.title}>
+            <span>{item.icon}</span>
+            <div>
+              <strong>{item.title}</strong>
+              <p>{item.text}</p>
+            </div>
+          </article>
+        ))}
       </section>
 
       <section className="catalog" id="catalogo">
         <div className="section-heading">
           <div>
             <span className="eyebrow dark">CATALOGO</span>
-            <h2>Elegi como moverte</h2>
+            <h2>Unidades del local</h2>
           </div>
-          <p>Publicaciones activas del local listas para consultar por WhatsApp.</p>
+          <div className="catalog-summary">
+            <p>Publicamos disponibles y reservadas para que veas el movimiento real del stock. Consultanos por alternativas similares.</p>
+            <span>{availableCount} disponibles</span>
+            <span>{reservedCount} reservadas</span>
+          </div>
         </div>
         <div className="catalog-tools">
           <div className="filters" role="group" aria-label="Filtrar catalogo">
@@ -211,50 +355,93 @@ function Storefront() {
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar modelo" />
           </label>
         </div>
-        <div className="product-grid">
-          {visible.map((product) => (
-            <article className={`product-card ${product.tone}`} key={product.id}>
-              <div className="product-image">
-                <img src={product.image} alt={product.title} loading="lazy" />
-                <div className="product-image-shade" />
-                <div className="product-badges">
-                  <span className="type-badge">{product.type}</span>
-                  <span className="featured-badge">
-                    <Sparkles size={13} /> Seleccionada
-                  </span>
-                </div>
-                <div className="image-price">
-                  <small>Precio</small>
-                  <strong>{product.price}</strong>
-                </div>
-              </div>
-              <div className="product-body">
-                <div className="product-title-row">
-                  <div>
-                    <p className="product-meta">{product.meta}</p>
-                    <h3>{product.title}</h3>
+        {visible.length === 0 ? (
+          <div className="catalog-empty">
+            <Search size={24} />
+            <strong>No encontramos esa unidad</strong>
+            <p>Probá con otro modelo o escribinos por WhatsApp y te pasamos alternativas del local.</p>
+            <a href="https://wa.me/5493815448139" target="_blank" rel="noreferrer">
+              <MessageCircle size={18} /> Consultar stock
+            </a>
+          </div>
+        ) : (
+          <div className="product-grid">
+            {visible.map((product) => {
+            const isReserved = product.status === "Reservada";
+            const whatsappText = isReserved
+              ? `Hola, vi que ${product.title} esta reservada en Estacion 2 Ruedas. Tienen algo similar disponible?`
+              : `Hola, vi la publicacion de ${product.title} en Estacion 2 Ruedas. Sigue disponible?`;
+
+            return (
+              <article className={`product-card ${product.tone}${isReserved ? " reserved-card" : ""}`} key={product.id}>
+                <div className="product-image">
+                  {product.image ? <img src={product.image} alt={product.title} loading="lazy" /> : <ImageOff size={38} />}
+                  <div className="product-image-shade" />
+                  {isReserved && <span className="reserved-ribbon">Reservada</span>}
+                  <div className="product-badges">
+                    <span className="type-badge">{product.type}</span>
+                    <span className={isReserved ? "reserved-badge" : "featured-badge"}>
+                      {isReserved ? <Clock3 size={13} /> : <Sparkles size={13} />}
+                      {isReserved ? "Apartada" : "Seleccionada"}
+                    </span>
                   </div>
-                  <span className="card-number">0{product.id}</span>
+                  <div className="image-price">
+                    <small>{isReserved ? "Precio publicado" : "Precio"}</small>
+                    <strong>{product.price}</strong>
+                  </div>
                 </div>
-                <p className="product-description">{product.description}</p>
-                <div className="product-bottom">
-                  <span className="availability">
-                    <i /> Disponible
-                  </span>
-                  <a
-                    href={`https://wa.me/5493815448139?text=${encodeURIComponent(
-                      `Hola, vi la publicacion de ${product.title} en Estacion 2 Ruedas. Sigue disponible?`,
-                    )}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <MessageCircle size={20} /> Consultar <ArrowUpRight size={17} />
-                  </a>
+                <div className="product-body">
+                  <div className="product-title-row">
+                    <div>
+                      <p className="product-meta">{product.meta}</p>
+                      <h3>{product.title}</h3>
+                    </div>
+                    <span className="card-number">0{product.id}</span>
+                  </div>
+                  <p className="product-description">{product.description}</p>
+                  <ul className="product-highlights">
+                    {product.highlights.map((highlight) => (
+                      <li key={highlight}>
+                        <CheckCircle2 size={15} /> {highlight}
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="product-bottom">
+                    <strong className="listing-price">{product.price}</strong>
+                    <span className={`availability${isReserved ? " reserved" : ""}`}>
+                      <i /> {isReserved ? "Reservada" : "Disponible"}
+                    </span>
+                    <a
+                      className={isReserved ? "reserved-action" : undefined}
+                      href={`https://wa.me/5493815448139?text=${encodeURIComponent(whatsappText)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <MessageCircle size={20} /> {isReserved ? "Consultar similares" : "Consultar"} <ArrowUpRight size={17} />
+                    </a>
+                  </div>
                 </div>
-              </div>
-            </article>
-          ))}
+              </article>
+            );
+            })}
+          </div>
+        )}
+      </section>
+
+      <section className="buying-flow" aria-labelledby="buying-flow-title">
+        <div>
+          <span className="eyebrow dark">COMPRA SIMPLE</span>
+          <h2 id="buying-flow-title">Sin vueltas raras.</h2>
+          <p>Te atendemos directo, con la unidad a la vista y la informacion importante sobre la mesa.</p>
         </div>
+        <ol>
+          {buyingSteps.map((step, index) => (
+            <li key={step}>
+              <span>{String(index + 1).padStart(2, "0")}</span>
+              {step}
+            </li>
+          ))}
+        </ol>
       </section>
 
       <section className="location" id="ubicacion">
@@ -267,7 +454,7 @@ function Storefront() {
           <p>San Miguel de Tucuman</p>
         </div>
         <a href="https://wa.me/5493815448139" target="_blank" rel="noreferrer">
-          <MessageCircle size={21} /> 381 544-8139
+          <PhoneCall size={21} /> 381 544-8139
         </a>
       </section>
 
@@ -299,12 +486,49 @@ function buildDraft(product?: Product): ProductDraft {
     meta: product.meta,
     description: product.description,
     status: product.status,
+    image: product.image,
   };
 }
 
-function AdminPanel() {
+function resizeImageFile(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onerror = () => reject(new Error("No se pudo leer la imagen."));
+    reader.onload = () => {
+      const image = new Image();
+
+      image.onerror = () => reject(new Error("La imagen no se pudo procesar."));
+      image.onload = () => {
+        const maxWidth = 1400;
+        const maxHeight = 1050;
+        const ratio = Math.min(maxWidth / image.width, maxHeight / image.height, 1);
+        const width = Math.round(image.width * ratio);
+        const height = Math.round(image.height * ratio);
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+
+        if (!context) {
+          reject(new Error("No se pudo preparar la imagen."));
+          return;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        context.drawImage(image, 0, 0, width, height);
+
+        resolve(canvas.toDataURL("image/jpeg", 0.82));
+      };
+
+      image.src = String(reader.result);
+    };
+
+    reader.readAsDataURL(file);
+  });
+}
+
+function AdminPanel({ products, setProducts }: { products: Product[]; setProducts: Dispatch<SetStateAction<Product[]>> }) {
   const [isUnlocked, setIsUnlocked] = useState(false);
-  const [products, setProducts] = useState(initialProducts);
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<"Todas" | ProductType>("Todas");
   const [statusFilter, setStatusFilter] = useState<"Todos" | ProductStatus>("Todos");
@@ -331,12 +555,33 @@ function AdminPanel() {
   const publishedCount = products.filter((product) => product.status === "Publicada").length;
   const totalLeads = products.reduce((sum, product) => sum + product.leads, 0);
   const totalViews = products.reduce((sum, product) => sum + product.views, 0);
+  const attentionCount = products.filter((product) => product.status === "Reservada" || product.status === "Borrador").length;
 
   function openEditor(product?: Product) {
     setDraft(buildDraft(product));
     setFormError("");
     setSelectedId(product?.id ?? 0);
     setIsEditorOpen(true);
+  }
+
+  async function handlePhotoChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      setFormError("Selecciona una foto valida en formato imagen.");
+      return;
+    }
+
+    try {
+      const image = await resizeImageFile(file);
+      setDraft((current) => ({ ...current, image }));
+      setFormError("");
+    } catch {
+      setFormError("No pude cargar esa foto. Proba con otra imagen.");
+    }
   }
 
   function saveDraft() {
@@ -349,12 +594,12 @@ function AdminPanel() {
       const nextProduct: Product = {
         id: Date.now(),
         ...draft,
-        image: "",
         tone: "orange",
         stockCode: `${draft.type === "Moto" ? "M" : "B"}-${Math.floor(Math.random() * 9000) + 1000}`,
         views: 0,
         leads: 0,
         updatedAt: "Recien creada",
+        highlights: ["Pendiente de revision", "Fotos por cargar", "Lista para completar"],
       };
       setProducts((current) => [nextProduct, ...current]);
       setSelectedId(nextProduct.id);
@@ -376,8 +621,9 @@ function AdminPanel() {
   }
 
   function removeSelectedProduct() {
+    const nextSelectedId = products.find((product) => product.id !== selectedId)?.id ?? 0;
     setProducts((current) => current.filter((product) => product.id !== selectedId));
-    setSelectedId(products.find((product) => product.id !== selectedId)?.id ?? 0);
+    setSelectedId(nextSelectedId);
     setIsEditorOpen(false);
   }
 
@@ -458,6 +704,10 @@ function AdminPanel() {
               <span>Vistas</span>
               <strong>{totalViews}</strong>
             </div>
+            <div>
+              <span>Revisar</span>
+              <strong>{attentionCount}</strong>
+            </div>
           </section>
 
           <section className="admin-workspace">
@@ -521,15 +771,21 @@ function AdminPanel() {
                     <AdminEmptyState onCreate={() => openEditor()} compact />
                   ) : (
                     filteredProducts.map((item) => (
-                      <button
+                      <div
                         className={`inventory-row ${selectedId === item.id ? "selected" : ""}`}
                         key={item.id}
                         onClick={() => {
                           setSelectedId(item.id);
                           setDraft(buildDraft(item));
                         }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            setSelectedId(item.id);
+                            setDraft(buildDraft(item));
+                          }
+                        }}
                         role="row"
-                        type="button"
+                        tabIndex={0}
                       >
                         <span className="item-main" role="cell">
                           <span className="item-thumb">{item.image ? <img src={item.image} alt="" /> : <ImageOff size={20} />}</span>
@@ -557,7 +813,7 @@ function AdminPanel() {
                             <Pencil size={17} />
                           </button>
                         </span>
-                      </button>
+                      </div>
                     ))
                   )}
                 </div>
@@ -570,30 +826,39 @@ function AdminPanel() {
                   <div className="detail-image">
                     {selectedProduct.image ? <img src={selectedProduct.image} alt={selectedProduct.title} /> : <ImageOff size={34} />}
                   </div>
-                  <div className="detail-header">
-                    <span className={`status ${selectedProduct.status.toLowerCase()}`}>
-                      {statusIcon(selectedProduct.status)} {selectedProduct.status}
-                    </span>
-                    <button onClick={() => openEditor(selectedProduct)} type="button">
-                      <Pencil size={16} /> Editar
-                    </button>
+                  <div className="detail-content">
+                    <div className="detail-header">
+                      <span className={`status ${selectedProduct.status.toLowerCase()}`}>
+                        {statusIcon(selectedProduct.status)} {selectedProduct.status}
+                      </span>
+                      <button onClick={() => openEditor(selectedProduct)} type="button">
+                        <Pencil size={16} /> Editar
+                      </button>
+                    </div>
+                    <h2>{selectedProduct.title}</h2>
+                    <p>{selectedProduct.description}</p>
+                    <ul className="detail-highlights">
+                      {selectedProduct.highlights.map((highlight) => (
+                        <li key={highlight}>
+                          <CheckCircle2 size={15} /> {highlight}
+                        </li>
+                      ))}
+                    </ul>
+                    <dl>
+                      <div>
+                        <dt>Precio</dt>
+                        <dd>{selectedProduct.price}</dd>
+                      </div>
+                      <div>
+                        <dt>Codigo</dt>
+                        <dd>{selectedProduct.stockCode}</dd>
+                      </div>
+                      <div>
+                        <dt>Ultimo cambio</dt>
+                        <dd>{selectedProduct.updatedAt}</dd>
+                      </div>
+                    </dl>
                   </div>
-                  <h2>{selectedProduct.title}</h2>
-                  <p>{selectedProduct.description}</p>
-                  <dl>
-                    <div>
-                      <dt>Precio</dt>
-                      <dd>{selectedProduct.price}</dd>
-                    </div>
-                    <div>
-                      <dt>Codigo</dt>
-                      <dd>{selectedProduct.stockCode}</dd>
-                    </div>
-                    <div>
-                      <dt>Ultimo cambio</dt>
-                      <dd>{selectedProduct.updatedAt}</dd>
-                    </div>
-                  </dl>
                 </>
               ) : (
                 <AdminEmptyState onCreate={() => openEditor()} compact />
@@ -622,6 +887,29 @@ function AdminPanel() {
               )}
 
               <div className="form-grid">
+                <div className="photo-field wide">
+                  <span>Foto de la unidad</span>
+                  <div className="photo-uploader">
+                    <div className="photo-preview">
+                      {draft.image ? <img src={draft.image} alt={`Vista previa de ${draft.title || "la unidad"}`} /> : <ImageOff size={30} />}
+                    </div>
+                    <div className="photo-copy">
+                      <strong>Usa una foto horizontal o cuadrada.</strong>
+                      <small>La imagen se ajusta automaticamente para que todas las tarjetas mantengan el mismo tamaño.</small>
+                      <div className="photo-actions">
+                        <label className="upload-action">
+                          Cargar foto
+                          <input accept="image/*" onChange={handlePhotoChange} type="file" />
+                        </label>
+                        {draft.image && (
+                          <button className="remove-photo" onClick={() => setDraft({ ...draft, image: "" })} type="button">
+                            Quitar
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
                 <label>
                   Modelo
                   <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
@@ -718,5 +1006,7 @@ function AdminErrorState({ onRetry }: { onRetry: () => void }) {
 }
 
 export default function App() {
-  return window.location.pathname.startsWith("/admin") ? <AdminPanel /> : <Storefront />;
+  const [products, setProducts] = usePersistentProducts();
+
+  return window.location.pathname.startsWith("/admin") ? <AdminPanel products={products} setProducts={setProducts} /> : <Storefront products={products} />;
 }
